@@ -45,6 +45,6 @@ pip-delete-this-directory.txt
 .vscode/
 
 logs/
-data/
+#data/
 
 mlflow_artifacts/
