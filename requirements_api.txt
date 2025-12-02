@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pandas
+numpy
+scikit-learn
+mlflow
+psycopg2-binary
+email-validator>=2.0.0
+joblib
+xgboost
+pytest
+unidecode

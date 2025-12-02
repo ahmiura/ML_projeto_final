@@ -1,0 +1,16 @@
+pandas
+numpy
+apache-airflow==2.8.0
+requests
+sqlalchemy
+psycopg2-binary
+pyarrow
+scikit-learn
+mlflow
+fastapi
+uvicorn
+joblib
+xgboost
+pytest
+unidecode
+lightgbm
