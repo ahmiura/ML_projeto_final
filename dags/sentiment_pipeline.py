@@ -14,14 +14,20 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
-# @postgres_app = Nome do serviço no docker-compose
-# /bacen = Nome do banco de dados definido no docker-compose
-DB_CONN = "postgresql+psycopg2://airflow:airflow123@postgres_app/bacen"
-RAW_CSV = "/opt/airflow/data/olist_order_reviews_dataset.csv"
+# --- Configurações lidas do ambiente (via .env) ---
 
-# Caminhos temporários para troca de dados entre tasks
-PATH_RAW = "/tmp/reviews_raw.parquet"
-PATH_REFINED = "/tmp/reviews_clean.parquet"
+# Monta a string de conexão a partir de variáveis de ambiente
+db_user = os.getenv("POSTGRES_USER")
+db_password = os.getenv("POSTGRES_PASSWORD")
+db_name = os.getenv("POSTGRES_DB_APP", "bacen")
+db_host = "postgres_app" # Nome do serviço no docker-compose
+DB_CONN = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}/{db_name}"
+
+# Caminhos para o pipeline
+RAW_CSV = os.getenv("RAW_CSV_PATH", "/opt/airflow/data/olist_order_reviews_dataset.csv")
+PATH_RAW = os.getenv("TEMP_RAW_PATH", "/tmp/reviews_raw.parquet")
+PATH_REFINED = os.getenv("TEMP_REFINED_PATH", "/tmp/reviews_clean.parquet")
+
 
 # Função wrapper para chamar o trainer com o argumento correto
 def task_train_callable(db_connection_str):

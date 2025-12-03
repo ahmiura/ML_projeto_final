@@ -20,6 +20,11 @@ model_name_loaded = None
 model_registry_version = None
 model_algorithm_loaded = None
 
+# Carrega variáveis de ambiente para conexão com o banco
+db_user = os.getenv("POSTGRES_USER")
+db_pass = os.getenv("POSTGRES_PASSWORD")
+db_host = os.getenv("POSTGRES_HOST", "postgres_app") # Se nãoo encontrar o default é postgres_app
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Código de inicialização (executa quando a API sobe)
@@ -59,7 +64,7 @@ async def lifespan(app: FastAPI):
             vectorizer = mlflow.sklearn.load_model(f"runs:/{run_id}/vectorizer")
             
             # Inicializa o monitor de predições
-            DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://airflow:airflow123@postgres_app/bacen")
+            DATABASE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}/bacen"
             monitoring = PredictionMonitoring(DATABASE_URL)
             
             print("Modelo, Vetorizador e Monitoramento carregados com sucesso!")
@@ -80,7 +85,7 @@ mlflow.set_tracking_uri("http://mlflow:5000")
 
 # --- MELHORIA: Criar o engine uma única vez ---
 # Carregar a string de conexão de variáveis de ambiente para segurança
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://airflow:airflow123@postgres_app/bacen")
+DATABASE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}/bacen"
 # O engine é pesado, deve ser criado apenas uma vez quando a aplicação sobe.
 # O pool de conexões será gerenciado automaticamente.
 db_engine = create_engine(DATABASE_URL)

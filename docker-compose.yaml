@@ -5,14 +5,15 @@ x-airflow-common:
   build:
     context: .
     dockerfile: ./docker/airflow.Dockerfile
+  env_file: ./.env
   environment:
     &airflow-common-env
     # --- CONFIGURAÇÃO DE PRODUÇÃO (Celery) ---
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres/${AIRFLOW_DB_NAME}
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres/${AIRFLOW_DB_NAME}
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__FERNET_KEY: '${AIRFLOW_FERNET_KEY}'
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
@@ -38,9 +39,9 @@ services:
   postgres:
     image: postgres:13
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: ${AIRFLOW_DB_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME}
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
@@ -161,22 +162,28 @@ services:
     image: postgres:14
     container_name: postgres_bacen
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow123
-      POSTGRES_DB: bacen
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB_APP}
     ports:
       - "5433:5432"
     volumes:
       - postgres_app_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql # Script para criar tabela inicial
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB_APP}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: always
 
   pgadmin:
     image: dpage/pgadmin4
     container_name: pgadmin_bacen
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
     ports:
       - "5050:80"
     depends_on:
@@ -189,19 +196,32 @@ services:
     container_name: mlflow_server
     ports:
       - "5000:5000"
+    env_file: ./.env
     environment:
-      - BACKEND_STORE_URI=postgresql://airflow:airflow123@postgres_app:5432/mlflow_db
+      - BACKEND_STORE_URI=postgresql://${MLFLOW_DB_USER}:${MLFLOW_DB_PASSWORD}@postgres_bacen:5432/${MLFLOW_DB_NAME}
       - DEFAULT_ARTIFACT_ROOT=/mlflow/artifacts
     volumes:
       - ./mlflow_artifacts:/mlflow/artifacts
-    command: >
-      mlflow server
-      --backend-store-uri postgresql://airflow:airflow123@postgres_app:5432/mlflow_db
+    # O comando agora reutiliza a variável de ambiente BACKEND_STORE_URI
+    # Usamos 'sh -c' e '$VARIAVEL' para que o shell DENTRO do container resolva a variável,
+    # em vez do docker-compose tentar resolver no HOST.
+    command: sh -c 'mlflow server
+      --backend-store-uri $$BACKEND_STORE_URI
       --host 0.0.0.0
       --port 5000
-      --default-artifact-root /mlflow/artifacts
+      --default-artifact-root $$DEFAULT_ARTIFACT_ROOT'
+    healthcheck:
+      # Usa Python para verificar a porta, pois 'curl' não está na imagem base do MLflow.
+      # Tenta abrir uma conexão TCP na porta 5000. Se sucesso, o serviço está de pé.
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 5000))"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     depends_on:
-      - postgres_app
+      postgres_app:
+        condition: service_healthy # Garante que o mlflow só inicie após o banco estar pronto
+    restart: always
 
   api:
     build:
@@ -209,18 +229,20 @@ services:
       dockerfile: ./docker/api.Dockerfile
     container_name: prediction_api
     command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+    env_file: ./.env
     ports:
       - "8000:8000"
     volumes:
       - ./src:/app/src
       - ./mlflow_artifacts:/mlflow/artifacts
     environment:
+      # A API já lê as variáveis do .env para montar a conexão com o banco.
       - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - POSTGRES_HOST=postgres_app
-      - DATABASE_URL=postgresql+psycopg2://airflow:airflow123@postgres_app:5432/bacen
     depends_on:
-      - mlflow
-      - postgres_app
+      mlflow:
+        condition: service_healthy # Espera o healthcheck do mlflow passar
+      postgres_app:
+        condition: service_healthy # Espera o banco de dados estar pronto
     restart: always
 
   dashboard:
@@ -233,12 +255,10 @@ services:
       - "8501:8501"
     environment:
       # O dashboard vai procurar a API pelo nome do serviço 'api' na rede interna do Docker.
-      - API_URL=http://prediction_api:8000
-      - DATABASE_URL=postgresql+psycopg2://airflow:airflow123@postgres_app:5432/bacen
+      - API_URL=http://api:8000
     depends_on:
       # Garante que o serviço 'api' seja iniciado antes do 'dashboard'
       - api
-      - postgres_app
     volumes:
       - ./src:/app/src
     restart: always

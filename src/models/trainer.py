@@ -1,4 +1,5 @@
 import pandas as pd
+import logging
 from sqlalchemy import create_engine
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
@@ -13,15 +14,25 @@ from sklearn.svm import LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
 import lightgbm as lgb
 
-def train_sentiment_model(db_connection_str):
-    """Lê do Postgres, treina modelo e loga no MLflow"""
-    mlflow.set_tracking_uri("http://mlflow:5000")
-    mlflow.set_experiment("sentiment_analysis")
-    
-    print("Lendo dados da Feature Store...")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+SEED = 42
+
+def get_data(db_connection_str: str) -> pd.DataFrame:
+    """Lê os dados da tabela de features no banco de dados."""
+    logging.info("Lendo dados da Feature Store...")
     engine = create_engine(db_connection_str)
-    df = pd.read_sql("SELECT * FROM reviews_features", engine)
-    
+    try:
+        df = pd.read_sql("SELECT texto_limpo, target FROM reviews_features", engine)
+        logging.info(f"Dados carregados com sucesso: {df.shape}")
+        return df
+    except Exception as e:
+        logging.error(f"Falha ao ler dados do banco: {e}")
+        raise
+
+def preprocess_data(df: pd.DataFrame):
+    """Vetoriza o texto e divide os dados em treino e teste."""
+    logging.info("Pré-processando e vetorizando dados...")
     # Vetorização - Otimizações
     tfidf = TfidfVectorizer(
         max_features=3000,       # Aumentado para capturar mais vocabulário
@@ -34,11 +45,10 @@ def train_sentiment_model(db_connection_str):
     y = df['target']
     
     # Split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    # Configuração dos Modelos e Hiperparâmetros
-    # Dicionário contendo o modelo e a grade de parâmetros para testar
-    SEED = 42
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=SEED)
+    return X_train, X_test, y_train, y_test, tfidf
+
+def get_model_configs():
     configuracoes = {
         "Logistic_Regression": {
             "modelo": LogisticRegression(solver='liblinear', class_weight='balanced', random_state=SEED),
@@ -56,7 +66,13 @@ def train_sentiment_model(db_connection_str):
             }
         },
         "XGBoost": {
-            "modelo": XGBClassifier(eval_metric='logloss', scale_pos_weight=5, random_state=SEED),
+            "modelo": XGBClassifier(
+                eval_metric='logloss', 
+                scale_pos_weight=5, 
+                random_state=SEED,
+                # Otimização de performance: 'hist' é muito mais rápido que o método 'exact' padrão
+                tree_method='hist' 
+            ),
             "params": {
                 "learning_rate": [0.01, 0.1, 0.2],  # Taxa de aprendizado
                 "n_estimators": [100, 200],         # Número de árvores
@@ -82,18 +98,18 @@ def train_sentiment_model(db_connection_str):
             }
         }
     }
-    
-    # Variáveis para rastrear o melhor modelo global
-    best_global_f1 = -1
-    best_global_run_id = ""
-    best_global_model_name = ""
-    
-    # Loop de Treinamento com GridSearch
+    return configuracoes
+
+def train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf):
+    """Itera sobre as configurações, treina, avalia e loga os modelos no MLflow."""
+    configuracoes = get_model_configs()
+    best_run = {"f1": -1, "run_id": None, "model_name": None}
+
     for nome_modelo, config in configuracoes.items():
         with mlflow.start_run(run_name=nome_modelo) as run:
-            print(f"Treinando {nome_modelo}...")
+            logging.info(f"Treinando {nome_modelo}...")
 
-            # Configura o GridSearch
+            # Configura o RandomizedSearch (ou GridSearchCV)
             # cv=3: Validação cruzada com 3 dobras (divide treino em 3 pedaços)
             # scoring='f1': Otimiza focado no F1-Score
             #grid = GridSearchCV(
@@ -104,8 +120,6 @@ def train_sentiment_model(db_connection_str):
             #    n_jobs=-1, # Usa todos os processadores para ser mais rápido
             #   verbose=1
             #)
-
-            # Configura o RandomizedSearch
             random_search = RandomizedSearchCV(
                 estimator=config["modelo"], 
                 param_distributions=config["params"], 
@@ -118,61 +132,75 @@ def train_sentiment_model(db_connection_str):
             )
             
             # Treina testando todas as combinações
-            with joblib.parallel_backend('threading', n_jobs=-1):
-                # grid.fit(X_train, y_train)
-                random_search.fit(X_train, y_train)
-
-            # Pega o melhor modelo encontrado para esse algoritmo
-            melhor_modelo_atual = random_search.best_estimator_
-            melhores_params_atual = random_search.best_params_
+            # Otimização: Adiciona Early Stopping para interromper treinos que não melhoram
+            fit_params = {}
+            if nome_modelo == "XGBoost":
+                fit_params = {
+                    "early_stopping_rounds": 10, # Para o treino se a métrica não melhorar em 10 rodadas
+                    "eval_set": [(X_test, y_test)],
+                    "verbose": False # Evita poluir o log com o progresso do early stopping
+                }
             
-            # Faz a previsão nos dados de TESTE
-            preds = melhor_modelo_atual.predict(X_test)
+            random_search.fit(X_train, y_train, **fit_params)
             
-            # Calcula Métricas
-            metrics = {
-                "accuracy": accuracy_score(y_test, preds),
-                "precision": precision_score(y_test, preds),
-                "recall": recall_score(y_test, preds),
-                "f1": f1_score(y_test, preds)
-            }
+            best_model = random_search.best_estimator_
+            best_params = random_search.best_params_
+            
+            preds = best_model.predict(X_test)
+            metrics = evaluate_model(y_test, preds)
             
             # Logar Parâmetros e Métricas
-            mlflow.log_params(melhores_params_atual) # Loga os hiperparâmetros vencedores
+            mlflow.log_params(best_params)
             mlflow.log_metrics(metrics)
             
             # Logar Modelo e Vetorizador
-            mlflow.sklearn.log_model(melhor_modelo_atual, "model")
+            mlflow.sklearn.log_model(best_model, "model")
             mlflow.sklearn.log_model(tfidf, "vectorizer")
             
-            print(f"{nome_modelo} (Melhor Config) - F1: {metrics['f1']:.4f}")
+            logging.info(f"{nome_modelo} (Melhor Config) - F1: {metrics['f1']:.4f}")
             
             # Verifica se é o melhor modelo geral
-            if metrics['f1'] > best_global_f1:
-                best_global_f1 = metrics['f1']
-                best_global_run_id = run.info.run_id
-                best_global_model_name = nome_modelo
+            if metrics['f1'] > best_run["f1"]:
+                best_run["f1"] = metrics['f1']
+                best_run["run_id"] = run.info.run_id
+                best_run["model_name"] = nome_modelo
+    return best_run
 
-    # --- ETAPA DE REGISTRO (MODEL REGISTRY) ---
-    if best_global_run_id:
-        print(f"\n Melhor Modelo Geral: {best_global_model_name} com F1: {best_global_f1:.4f}")
-        print(f"Registrando modelo do Run ID: {best_global_run_id} para Produção...")
+def evaluate_model(y_true, y_pred):
+    """Calcula e retorna um dicionário de métricas."""
+    return {
+        "accuracy": accuracy_score(y_true, y_pred),
+        "precision": precision_score(y_true, y_pred),
+        "recall": recall_score(y_true, y_pred),
+        "f1": f1_score(y_true, y_pred)
+    }
+
+def register_best_model(best_run: dict, registry_name: str = "modelo_sentimento_bacen"):
+    """Registra o melhor modelo do experimento no Model Registry e o promove para Produção."""
+    if best_run["run_id"]:
+        logging.info(f"\nMelhor Modelo Geral: {best_run['model_name']} com F1: {best_run['f1']:.4f}")
+        logging.info(f"Registrando modelo do Run ID: {best_run['run_id']} para Produção...")
         
-        # Nome do modelo no Registry
-        model_registry_name = "modelo_sentimento_bacen"
-        model_uri = f"runs:/{best_global_run_id}/model"
-        
-        # 1. Registra a versão
-        registered_model = mlflow.register_model(model_uri, model_registry_name)
-        
-        # 2. Promove para Produção (Stage='Production')
+        model_uri = f"runs:/{best_run['run_id']}/model"
+        registered_model = mlflow.register_model(model_uri, registry_name)
+
         client = mlflow.tracking.MlflowClient()
         client.transition_model_version_stage(
-            name=model_registry_name,
+            name=registry_name,
             version=registered_model.version,
             stage="Production",
-            archive_existing_versions=True # Move o anterior para Archived
+            archive_existing_versions=True
         )
-        print(f"Modelo versão {registered_model.version} promovido para PRODUCTION!")
-        
-    return f"Pipeline finalizado. Campeão: {best_global_model_name}"
+        logging.info(f"Modelo versão {registered_model.version} promovido para PRODUCTION!")
+
+def train_sentiment_model(db_connection_str: str):
+    """Lê do Postgres, treina modelo e loga no MLflow"""
+    mlflow.set_tracking_uri("http://mlflow:5000")
+    mlflow.set_experiment("sentiment_analysis")
+
+    df = get_data(db_connection_str)
+    X_train, X_test, y_train, y_test, tfidf = preprocess_data(df)
+    best_run = train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf)
+    register_best_model(best_run)
+    
+    return f"Pipeline finalizado. Campeão: {best_run['model_name']}"
