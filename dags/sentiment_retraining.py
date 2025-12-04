@@ -1,4 +1,5 @@
 import sys
+import os
 sys.path.insert(0, "/opt/airflow/src")
 sys.path.insert(0, "/opt/airflow")
 
@@ -15,7 +16,13 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
-DB_CONN = "postgresql+psycopg2://airflow:airflow123@postgres_app/bacen"
+# --- Configurações lidas do ambiente (via .env) ---
+db_user = os.getenv("POSTGRES_USER")
+db_pass = os.getenv("POSTGRES_PASSWORD")
+db_host = "postgres_app"
+db_name = os.getenv("POSTGRES_DB_APP")
+
+DB_CONN = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}/{db_name}"
 
 def check_model_performance():
     """

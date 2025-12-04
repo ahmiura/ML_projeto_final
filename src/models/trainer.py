@@ -71,7 +71,8 @@ def get_model_configs():
                 scale_pos_weight=5, 
                 random_state=SEED,
                 # Otimização de performance: 'hist' é muito mais rápido que o método 'exact' padrão
-                tree_method='hist' 
+                tree_method='hist',
+                early_stopping_rounds=10
             ),
             "params": {
                 "learning_rate": [0.01, 0.1, 0.2],  # Taxa de aprendizado
@@ -123,7 +124,7 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf):
             random_search = RandomizedSearchCV(
                 estimator=config["modelo"], 
                 param_distributions=config["params"], 
-                n_iter=25,  # Número de combinações a testar
+                n_iter=20,  # Número de combinações a testar
                 cv=3, 
                 scoring='f1',
                 n_jobs=-1,   # Usa todos os processadores para ser mais rápido
@@ -131,17 +132,7 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf):
                 random_state=SEED
             )
             
-            # Treina testando todas as combinações
-            # Otimização: Adiciona Early Stopping para interromper treinos que não melhoram
-            fit_params = {}
-            if nome_modelo == "XGBoost":
-                fit_params = {
-                    "early_stopping_rounds": 10, # Para o treino se a métrica não melhorar em 10 rodadas
-                    "eval_set": [(X_test, y_test)],
-                    "verbose": False # Evita poluir o log com o progresso do early stopping
-                }
-            
-            random_search.fit(X_train, y_train, **fit_params)
+            random_search.fit(X_train, y_train)
             
             best_model = random_search.best_estimator_
             best_params = random_search.best_params_

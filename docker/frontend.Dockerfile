@@ -15,5 +15,5 @@ RUN apt-get update && apt-get install -y \
 RUN pip install --no-cache-dir pybind11
 
 # --- Instala dependências do requirements.txt ---
-COPY requirements_dashboard.txt /app/requirements.txt
+COPY requirements_frontend.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt

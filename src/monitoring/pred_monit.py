@@ -9,8 +9,14 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Monitoramento", page_icon="📊", layout="wide")
 st.title("📊 Monitoramento de Predições")
 
+# --- Configurações lidas do ambiente (via .env) ---
+db_user = os.getenv("POSTGRES_USER")
+db_pass = os.getenv("POSTGRES_PASSWORD")
+db_host = "postgres_app"
+db_name = os.getenv("POSTGRES_DB_APP")
+
 # Conexão com Banco
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://airflow:airflow123@postgres_app/bacen")
+DATABASE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}/{db_name}"
 engine = create_engine(DATABASE_URL)
 
 # Query os dados de logs
