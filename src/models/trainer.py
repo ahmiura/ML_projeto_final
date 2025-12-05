@@ -2,7 +2,7 @@ import pandas as pd
 import logging
 from sqlalchemy import create_engine
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
@@ -58,7 +58,7 @@ def get_model_configs():
             }
         },
         "Random_Forest": {
-            "modelo": RandomForestClassifier(class_weight='balanced', random_state=SEED),
+            "modelo": RandomForestClassifier(class_weight='balanced', random_state=SEED, n_jobs=-1),
             "params": {
                 "n_estimators": [50, 100, 200],   # Número de árvores
                 "max_depth": [10, 20, 30, None],  # Profundidade máxima
@@ -72,7 +72,7 @@ def get_model_configs():
                 random_state=SEED,
                 # Otimização de performance: 'hist' é muito mais rápido que o método 'exact' padrão
                 tree_method='hist',
-                early_stopping_rounds=10
+                n_jobs=-1
             ),
             "params": {
                 "learning_rate": [0.01, 0.1, 0.2],  # Taxa de aprendizado
@@ -110,17 +110,6 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf):
         with mlflow.start_run(run_name=nome_modelo) as run:
             logging.info(f"Treinando {nome_modelo}...")
 
-            # Configura o RandomizedSearch (ou GridSearchCV)
-            # cv=3: Validação cruzada com 3 dobras (divide treino em 3 pedaços)
-            # scoring='f1': Otimiza focado no F1-Score
-            #grid = GridSearchCV(
-            #    estimator=config["modelo"], 
-            #    param_grid=config["params"], 
-            #    cv=3, 
-            #    scoring='f1',
-            #    n_jobs=-1, # Usa todos os processadores para ser mais rápido
-            #   verbose=1
-            #)
             random_search = RandomizedSearchCV(
                 estimator=config["modelo"], 
                 param_distributions=config["params"], 
@@ -132,7 +121,8 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf):
                 random_state=SEED
             )
             
-            random_search.fit(X_train, y_train)
+            with joblib.parallel_backend('threading', n_jobs=-1):
+                random_search.fit(X_train, y_train)
             
             best_model = random_search.best_estimator_
             best_params = random_search.best_params_

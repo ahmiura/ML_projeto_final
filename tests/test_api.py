@@ -39,7 +39,7 @@ def test_predict_sentiment_insatisfeito(client_and_mocks):
     assert data["acao_sugerida"] == "TRANSBORDO_HUMANO"
     assert data["probabilidade_insatisfeito"] == 0.75
     # aceita qualquer valor numérico para tempo de inferência
-    mock_log.assert_called_once_with("Produto veio quebrado, péssimo!", "INSATISFEITO", 0.75, ANY)
+    mock_log.assert_called_once_with("Produto veio quebrado, péssimo!", "INSATISFEITO", 0.75, 0.75, ANY)
 
 def test_predict_sentiment_satisfeito(client_and_mocks):
     client, mock_model, _, mock_log = client_and_mocks
@@ -55,7 +55,7 @@ def test_predict_sentiment_satisfeito(client_and_mocks):
     assert response.status_code == 200
     data = response.json()
     assert data["sentimento"] == "SATISFEITO"
-    assert data["acao_sugerida"] == "CONTINUAR_CHATBOT"
+    assert data["acao_sugerida"] == "CONTINUAR_AVI"
     assert data["probabilidade_insatisfeito"] == 0.1
     mock_log.assert_called_once()
 

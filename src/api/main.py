@@ -9,6 +9,7 @@ import os
 from typing import Optional, AsyncGenerator, Dict, Any
 from datetime import datetime
 from sqlalchemy import create_engine, text
+import numpy as np
 
 # Importa a mesma função de limpeza usada no treinamento para garantir consistência
 from src.etl.processor import clean_text
@@ -102,7 +103,8 @@ class CustomerMessageRequest(BaseModel):
 def log_prediction(
     texto: str, 
     predicao: str, 
-    probabilidade: float, 
+    probabilidade_insatisfeito: float,
+    confianca: float,
     tempo_ms: float
 ) -> None:
     """Função de log de predições na tabela logs_predicoes"""
@@ -112,11 +114,14 @@ def log_prediction(
         modelo_info = f"{model_name_loaded}:{model_registry_version}"
         if model_algorithm_loaded:
             modelo_info = f"{modelo_info}|{model_algorithm_loaded}"
+    # A Coluna 'probabilidade_confianca' armazena a confiança da predição feita
+    # A coluna 'probabilidade' armazena a probabilidade de ser INSATISFEITO
     df = pd.DataFrame([{
         "data": datetime.now(),
         "texto_input": texto,
         "classificacao": predicao,
-        "probabilidade": probabilidade,
+        "probabilidade": probabilidade_insatisfeito,
+        "probabilidade_confianca": confianca,
         "tempo_inferencia_ms": tempo_ms,
         "modelo_version": modelo_info
     }])
@@ -146,26 +151,32 @@ def predict_sentiment(
     # Pre-processamento
     text_clean = clean_text(request.message)
     vectorized = vectorizer.transform([text_clean])
-    prediction = model.predict(vectorized)[0]
-    proba_insatisfeito = model.predict_proba(vectorized)[0][1]
+    prediction = model.predict(vectorized)[0] # 0=SATISFEITO, 1=INSATISFEITO
+    proba_insatisfeito = model.predict_proba(vectorized)[0][1] # Probabilidade da classe INSATISFEITO
     
     tempo_ms = (time.time() - inicio) * 1000  # Converte para ms
     
-    sentiment = "INSATISFEITO" if prediction == 1 else "SATISFEITO"
+    if prediction == 1:
+        sentiment = "INSATISFEITO"
+        confianca = proba_insatisfeito
+    else:
+        sentiment = "SATISFEITO"
+        confianca = 1 - proba_insatisfeito
     
     # Registra log assincronamente para não bloquear a resposta
     background_tasks.add_task(
         log_prediction, 
         request.message, 
         sentiment, 
-        float(proba_insatisfeito),
+        float(proba_insatisfeito), # probabilidade de ser insatisfeito
+        float(confianca),          # confiança na predição feita
         tempo_ms
     )
 
     return {
         "sentimento": sentiment,
         "probabilidade_insatisfeito": float(proba_insatisfeito),
-        "acao_sugerida": "TRANSBORDO_HUMANO" if prediction == 1 else "CONTINUAR_CHATBOT",
+        "acao_sugerida": "TRANSBORDO_HUMANO" if prediction == 1 else "CONTINUAR_AVI",
         "tempo_ms": round(tempo_ms, 2)
     }
 
@@ -249,11 +260,45 @@ def get_low_confidence_predictions(
             raise HTTPException(status_code=503, detail="Monitoramento não disponível")
         
         low_conf = monitoring.get_low_confidence_predictions(threshold, limit)
+
+        # Se o método retornar None ou o DataFrame estiver vazio, retorne uma resposta vazia
+        if low_conf is None or low_conf.empty:
+            return {
+                "total": 0,
+                "threshold": threshold,
+                "predicoes": []
+            }
+
+        # Converte DataFrame para lista de dicionários com tipos nativos Python
+        def _normalize_value(v):
+            if pd.isna(v):
+                return None
+            # numpy integers / floats / bools
+            if isinstance(v, (np.integer,)):
+                return int(v)
+            if isinstance(v, (np.floating,)):
+                return float(v)
+            if isinstance(v, (np.bool_,)):
+                return bool(v)
+            # pandas / numpy timestamps
+            if isinstance(v, (pd.Timestamp,)):
+                return v.isoformat()
+            if isinstance(v, (np.datetime64,)):
+                return pd.to_datetime(v).isoformat()
+            # fallback: normal python type (str, int, float, list, dict,...)
+            return v
         
+        predicoes_list = []
+        for _, row in low_conf.iterrows():
+            rec = {}
+            for k, v in row.items():
+                rec[k] = _normalize_value(v)
+            predicoes_list.append(rec)
+
         return {
             "total": len(low_conf),
             "threshold": threshold,
-            "predicoes": low_conf.to_dict('records')
+            "predicoes": predicoes_list
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao buscar predições: {str(e)}")

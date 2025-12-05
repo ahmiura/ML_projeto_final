@@ -1,24 +1,25 @@
 -- 1. Cria a tabela da aplicação
 CREATE TABLE IF NOT EXISTS reviews_features (
-    review_id VARCHAR(50) PRIMARY KEY,
-    texto_original TEXT,
-    texto_limpo TEXT,
-    target INT,
+    review_id VARCHAR(50) PRIMARY KEY, -- identificador único do review
+    texto_original TEXT, -- armazena o texto original do review
+    texto_limpo TEXT, -- armazena o texto limpo do review
+    target INT, -- armazena o target (0 ou 1)
     data_processamento TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 2. Cria a tabela de curadoria de predições (feedback)
 CREATE TABLE IF NOT EXISTS logs_predicoes (
-    id SERIAL PRIMARY KEY,
-    data TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    texto_input TEXT NOT NULL,
-    classificacao VARCHAR(50) NOT NULL,
-    probabilidade FLOAT NOT NULL,
-    confianca_baixa BOOLEAN GENERATED ALWAYS AS (probabilidade < 0.6) STORED,
-    modelo_version VARCHAR(50),
-    tempo_inferencia_ms FLOAT,
+    id SERIAL PRIMARY KEY, -- identificador único da predição
+    data TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- armazena a data da predição
+    texto_input TEXT NOT NULL, -- armazena o texto de entrada
+    classificacao VARCHAR(50) NOT NULL, -- INSATISFEITO, SATISFEITO
+    probabilidade FLOAT NOT NULL, -- armazena a probabilidade de ser INSATISFEITO
+    probabilidade_confianca FLOAT, -- armazena a confiança da predição
+    confianca_baixa BOOLEAN GENERATED ALWAYS AS (probabilidade_confianca < 0.6) STORED, -- armazena se a confiança é baixa
+    modelo_version VARCHAR(50), -- armazena a versão do modelo usado
+    tempo_inferencia_ms FLOAT, -- tempo de inferência em milissegundos
     feedback_humano VARCHAR(50), -- INSATISFEITO, SATISFEITO, CORRETO, INCORRETO
-    data_feedback TIMESTAMP
+    data_feedback TIMESTAMP -- data do feedback humano
 );
 
 -- criar índices (Postgres)

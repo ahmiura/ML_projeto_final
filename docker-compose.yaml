@@ -251,7 +251,9 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: ./docker/frontend.Dockerfile
+      dockerfile: ./docker/streamlit.Dockerfile
+      args:
+        - REQUIREMENTS_FILE=requirements_frontend.txt
     container_name: frontend_app
     command: streamlit run src/frontend/main.py
     ports:
@@ -262,6 +264,29 @@ services:
     depends_on:
       # Garante que o serviço 'api' seja iniciado antes do 'frontend'
       - api
+    volumes:
+      - ./src:/app/src
+    restart: always
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: ./docker/streamlit.Dockerfile
+      args:
+        - REQUIREMENTS_FILE=requirements_dashboard.txt
+    container_name: dashboard_app
+    command: streamlit run src/monitoring/dashboard.py
+    env_file: ./.env
+    ports:
+      - "8601:8501"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB_APP=${POSTGRES_DB_APP}
+      - PYTHONPATH=/app
+    depends_on:
+      # Garante que o serviço 'postgres_app' seja iniciado antes do 'dashboard'
+      - postgres_app
     volumes:
       - ./src:/app/src
     restart: always
