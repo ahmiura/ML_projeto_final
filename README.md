@@ -1,108 +1,165 @@
-# Pipeline de MLOps: Análise de Sentimento de E-commerce
+# Projeto MLOps: Análise de Sentimento End-to-End
 
-Este projeto implementa uma plataforma completa de **MLOps (Machine Learning Operations)** para análise de sentimento de avaliações de clientes.
+Este projeto implementa um sistema completo de MLOps para um modelo de análise de sentimento. Ele abrange desde o processamento inicial de dados e treinamento até o deploy de uma API de inferência, monitoramento contínuo e retreinamento automatizado.
 
-A solução utiliza uma arquitetura de microserviços para garantir escalabilidade, reprodutibilidade e monitoramento contínuo do ciclo de vida do modelo de Machine Learning.
+## 📜 Visão Geral da Arquitetura
 
-## 🏛️ Arquitetura do Projeto
+O sistema é orquestrado em contêineres Docker e utiliza uma arquitetura de microsserviços para garantir desacoplamento e escalabilidade.
 
-O sistema foi desenhado seguindo o padrão de **Monorepo Modular**, onde o código de negócio é compartilhado entre os serviços de treinamento e inferência para evitar discrepância de dados (*Training-Serving Skew*).
+```
+      +-----------------+      +-----------------+      +-----------------+
+      |  Frontend (UI)  |----->|   API (FastAPI) |----->|  MLflow Server  |
+      |   (Streamlit)   |      +-----------------+      | (Model Registry)|
+      +-----------------+               |               +-------+---------+
+                                        |                       |
+      +-----------------+               |                       |
+      | Dashboard (UI)  |<--------------+-----------------------+------>+------------------+
+      |   (Streamlit)   |               |                               |  App Database    |
+      +-----------------+               |                               | (Postgres - App) |
+                                        |                               | - Features       |
+      +-----------------+               v                               | - Prediction Logs|
+      | Airflow         |<------------>+------------------+              | - MLflow Backend |
+      | - Webserver     |                                               +------------------+
+      | - Scheduler     |
+      | - Worker(s)     |
+      +-----------------+
+```
 
-### Componentes Principais (Docker Containers)
+### Componentes Principais
 
-1.  **Airflow (Orquestrador):** Gerencia o pipeline de dados (ETL) e o retreinamento periódico dos modelos.
-    * *Executor:* Celery (Distribuído) com Redis.
-2.  **PostgreSQL (Feature Store & Metadados):**
-    * Armazena os dados tratados (`reviews_features`) prontos para treinamento.
-    * Serve como backend para o Airflow e MLflow.
-3.  **MLflow (Model Registry):**
-    * Rastreia experimentos (métricas, parâmetros).
-    * Gerencia o versionamento dos modelos e promove o melhor (F1-score) para "Produção".
-4.  **API (Serving):**
-    * Serviço FastAPI.
-    * Carrega automaticamente a versão de produção do modelo do MLflow.
-5.  **Frontend:**
-    * Aplicação Streamlit para interação com o usuário e teste do modelo em tempo real.
+*   **Airflow**: Orquestra os pipelines de dados e machine learning.
+    *   **ETL Inicial**: Um pipeline para processar o dataset bruto, extrair features e treinar a primeira versão do modelo.
+    *   **Ciclo de Vida do Modelo**: Uma DAG diária que monitora a performance do modelo em produção, detecta data drift, verifica novos feedbacks e dispara o retreinamento quando necessário.
+*   **MLflow**: Centraliza o ciclo de vida do modelo.
+    *   **Tracking**: Registra experimentos, parâmetros, métricas e artefatos de cada treinamento.
+    *   **Model Registry**: Versiona os modelos e gerencia seus estágios (Staging, Production).
+*   **FastAPI**: Fornece uma API RESTful para servir as predições do modelo em produção.
+*   **PostgreSQL (x2)**:
+    *   **`postgres`**: Banco de dados de metadados exclusivo para o Airflow.
+    *   **`postgres_app` (aliás `postgres_bacen`)**: Banco de dados da aplicação, que armazena:
+        *   `reviews_features`: A "Feature Store" com os dados processados para treinamento.
+        *   `logs_predicoes`: Logs de todas as predições feitas pela API, incluindo feedbacks.
+        *   *MLflow Backend*: Tabelas para armazenar os metadados de experimentos e modelos do MLflow.
+*   **Streamlit (x2)**:
+    *   **Frontend**: Uma interface de usuário simples para interagir com a API de predição.
+    *   **Dashboard**: Um painel para monitorar a saúde do modelo, visualizar métricas e predições de baixa confiança.
+*   **Celery & Redis**: Utilizados pelo Airflow para executar tarefas de forma distribuída e assíncrona.
 
----
-
-## 🚀 Como Executar o Projeto
+## 🚀 Setup e Instalação
 
 ### Pré-requisitos
-* Docker e Docker Compose instalados.
-* Git.
+*   Docker
+*   Docker Compose
 
-### Passo a Passo
+### Passos para Instalação
 
-1.  **Clone o repositório:**
+1.  **Clone o Repositório**
     ```bash
-    git clone [https://github.com/seu-usuario/ml_projeto_final.git](https://github.com/seu-usuario/ml_projeto_final.git)
-    cd ml_projeto_final
+    git clone <url-do-seu-repositorio>
+    cd ML_projeto_final
     ```
 
-2.  **Configure as Credenciais:**
-    Crie um arquivo `.env` na raiz do projeto (baseado no exemplo abaixo) para definir as senhas do banco de dados e chaves de segurança.
-
-    ```env
-    POSTGRES_USER=airflow
-    POSTGRES_PASSWORD=airflow123
-    POSTGRES_DB_APP=bacen
-    
-    MLFLOW_DB_USER=airflow
-    MLFLOW_DB_PASSWORD=airflow123
-    MLFLOW_DB_NAME=mlflow_db
-    
-    # Gere uma chave Fernet válida para o Airflow
-    AIRFLOW_FERNET_KEY=SuaChaveGeradaAqui...
-    AIRFLOW_UID=50000
-    ```
-
-3.  **Construa e Inicie os Serviços:**
+2.  **Crie o Arquivo de Ambiente**
+    Copie o arquivo de exemplo `.env.example` para `.env`.
     ```bash
-    # 1. Construir as imagens Docker (pode levar alguns minutos)
-    docker-compose build
+    cp .env.example .env
+    ```
+    Abra o arquivo `.env` e gere uma chave Fernet para o Airflow:
+    ```bash
+    # No seu terminal, execute o comando abaixo e copie o resultado
+    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    ```
+    Cole a chave gerada na variável `AIRFLOW_FERNET_KEY` dentro do arquivo `.env`.
 
-    # 2. Inicializar o banco de dados do Airflow
-    docker-compose up airflow-init
-
-    # 3. Subir todo o ambiente em background
-    docker-compose up -d
+3.  **Defina o ID do Usuário Airflow**
+    Para evitar problemas de permissão com os arquivos gerados pelo Airflow, defina o ID do seu usuário local.
+    ```bash
+    echo "AIRFLOW_UID=$(id -u)" >> .env
     ```
 
-4.  **Acesse os Serviços:**
+4.  **Inicie os Serviços**
+    Execute o Docker Compose para construir as imagens e iniciar todos os contêineres em segundo plano.
+    ```bash
+    docker-compose up -d --build
+    ```
+    A primeira inicialização pode levar alguns minutos, pois o Airflow precisa inicializar seu banco de dados.
 
-    | Serviço | URL | Credenciais (Padrão) |
-    | :--- | :--- | :--- |
-    | **Airflow** | [http://localhost:8080](http://localhost:8080) | `airflow` / `airflow` |
-    | **MLflow** | [http://localhost:5000](http://localhost:5000) | - |
-    | **API Docs** | [http://localhost:8000/docs](http://localhost:8000/docs) | - |
-    | **Frontend** | [http://localhost:8501](http://localhost:8501) | - |
-    | **PgAdmin** | [http://localhost:5050](http://localhost:5050) | `admin@admin.com` / `admin` |
+## ⚙️ Como Operar o Sistema
 
----
+### Passo 1: Treinamento Inicial
 
-## 🧪 Executando o Pipeline
+O sistema começa sem nenhum modelo treinado. Você precisa executar o pipeline de ETL e treinamento inicial manualmente.
 
-1.  Acesse o **Airflow** (`localhost:8080`).
-2.  Ative o DAG **`olist_sentiment_pipeline`**.
-3.  O pipeline executará automaticamente as etapas:
-    * **Extração:** Lê o dataset bruto (`data/olist_order_reviews_dataset.csv`).
-    * **Transformação:** Limpa o texto e cria features.
-    * **Carga:** Salva os dados processados no PostgreSQL.
-    * **Treinamento:** Treina múltiplos modelos (Logistic Regression, Random Forest, XGBoost), compara a performance e registra o vencedor no MLflow.
+1.  Acesse a interface do Airflow: `http://localhost:8080` (usuário/senha: `airflow`/`airflow`).
+2.  Encontre a DAG `sentiment_initial_etl_and_training`.
+3.  Ative a DAG clicando no botão de toggle e, em seguida, clique no botão "Play" (▶️) para disparar uma execução.
 
-## 📊 Monitoramento e Melhoria Contínua
+Este processo irá:
+*   Ler o dataset da Olist.
+*   Processar e salvar as features no banco de dados da aplicação (tabela reviews_features).
+*   Treinar múltiplos modelos de classificação (Logistic Regression / Random Forest / XGBoost / LinearSVC_Calibrated / LightGBM), selecionar o melhor, validá-lo e promovê-lo para "Production" no MLflow.
 
-* **MLflow:** Acesse para ver o histórico de treinamentos, comparar a acurácia dos modelos e ver qual algoritmo venceu a batalha.
-* **API:** Reinicie a API (`docker-compose restart api`) após um novo treinamento para que ela carregue automaticamente a nova versão do modelo campeão promovido a produção.
+### Passo 2: Utilizando a API
 
-## 🛠️ Tecnologias Utilizadas
+Após o primeiro modelo ser treinado e promovido, a API estará pronta para servir predições.
 
-* **Linguagem:** Python 3.9+
-* **Machine Learning:** Scikit-Learn, XGBoost
-* **Engenharia de Dados:** Pandas, SQLAlchemy
-* **Infraestrutura:** Docker, Docker Compose, Redis
-* **MLOps:** Apache Airflow, MLflow
-* **Web:** FastAPI, Streamlit
+*   **Documentação Interativa (Swagger)**: `http://localhost:8000/docs`
+*   **Exemplo de Requisição `POST /predict`**:
+    ```bash
+    curl -X 'POST' \
+      'http://localhost:8000/predict' \
+      -H 'Content-Type: application/json' \
+      -d '{
+      "message": "Consegui resolver o meu problema no chat. Atendimento super ágil!"
+    }'
+    ```
 
----
+### Passo 3: Fornecendo Feedback
+
+Cada predição retorna um `prediction_id`. Use este ID para registrar um feedback, que será usado no retreinamento.
+
+*   **Exemplo de Requisição `POST /feedback/{prediction_id}`**:
+    ```bash
+    curl -X 'POST' \
+      'http://localhost:8000/feedback/1?feedback=INCORRETO&corrected_class=INSATISFEITO'
+    ```
+
+### Passo 4: Ciclo de Vida Automatizado
+
+A DAG `sentiment_model_lifecycle` é executada automaticamente todos os dias. Ela:
+1.  Verifica se a distribuição das predições recentes mudou (data drift).
+2.  Verifica se há um número suficiente de novos feedbacks (padrão: 50).
+3.  Se qualquer uma das condições for atendida, ela dispara o pipeline de retreinamento.
+4.  O novo modelo treinado é comparado com o modelo em produção (padrão Champion-Challenger).
+5.  Se o novo modelo for melhor, ele é automaticamente promovido para "Production", e a API passará a usá-lo na próxima reinicialização ou na próxima carga.
+
+## 🌐 Acessando os Serviços
+
+*   **Airflow UI**: `http://localhost:8080`
+*   **Flower (Monitoramento Celery)**: `http://localhost:5555`
+*   **MLflow UI**: `http://localhost:5000`
+*   **API (Swagger UI)**: `http://localhost:8000/docs`
+*   **Frontend App**: `http://localhost:8501`
+*   **Dashboard de Monitoramento**: `http://localhost:8601`
+*   **pgAdmin (Admin do Banco)**: `http://localhost:5050`
+
+## 📂 Estrutura do Projeto
+
+```
+├── dags/                 # Definições das DAGs do Airflow
+├── data/                 # Datasets brutos
+├── docker/               # Dockerfiles para cada serviço
+├── logs/                 # Logs do Airflow (mapeado do contêiner)
+├── mlflow_artifacts/     # Artefatos do MLflow (modelos, etc.)
+├── src/                  # Código-fonte da aplicação
+│   ├── api/              # Lógica da API FastAPI
+│   ├── db/               # Definições de schema e repositório do banco
+│   ├── etl/              # Scripts para os pipelines de ETL e retreino
+│   ├── frontend/         # Código do app Streamlit de interação
+│   ├── models/           # Lógica de treinamento e avaliação de modelos
+│   └── monitoring/       # Lógica para o dashboard e detecção de drift
+├── .env                  # Variáveis de ambiente (secretas)
+├── .env.example          # Arquivo de exemplo para o .env
+├── docker-compose.yaml   # Orquestração de todos os serviços
+└── README.md             # Esta documentação
+```
