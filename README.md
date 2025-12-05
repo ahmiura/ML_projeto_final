@@ -71,6 +71,18 @@ O sistema é orquestrado em contêineres Docker e utiliza uma arquitetura de mic
     ```
     Cole a chave gerada na variável `AIRFLOW_FERNET_KEY` dentro do arquivo `.env`.
 
+    Seu arquivo .env deve conter as seguintes variáveis (ajuste conforme necessário):
+    ```bash
+    POSTGRES_USER=airflow
+    POSTGRES_PASSWORD=airflow123
+    POSTGRES_DB_APP=bacen
+    MLFLOW_DB_USER=airflow
+    MLFLOW_DB_PASSWORD=airflow123
+    MLFLOW_DB_NAME=mlflow_db
+    AIRFLOW_FERNET_KEY=<cole_a_chave_gerada_aqui>
+    AIRFLOW_UID=50000
+    ```
+
 3.  **Defina o ID do Usuário Airflow**
     Para evitar problemas de permissão com os arquivos gerados pelo Airflow, defina o ID do seu usuário local.
     ```bash
@@ -162,4 +174,9 @@ A DAG `sentiment_model_lifecycle` é executada automaticamente todos os dias. El
 ├── .env.example          # Arquivo de exemplo para o .env
 ├── docker-compose.yaml   # Orquestração de todos os serviços
 └── README.md             # Esta documentação
+```
+
+## Rodando testes
+```bash
+pytest -q
 ```
