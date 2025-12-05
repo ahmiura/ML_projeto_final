@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS reviews_features (
     data_processamento TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. Cria a tabela de curadoria de predições (feedback)
+-- 2. Cria a tabela de curadoria de predições de sentimento
 CREATE TABLE IF NOT EXISTS logs_predicoes (
     id SERIAL PRIMARY KEY, -- identificador único da predição
     data TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- armazena a data da predição

@@ -6,10 +6,11 @@ sys.path.insert(0, "/opt/airflow")
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
+from src.models.trainer import train_sentiment_model
 from src.etl.processor import extract_data, transform_data, load_data
 
 default_args = {
-    "owner": "data_team",
+    "owner": "mlops_team",
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
@@ -29,17 +30,12 @@ PATH_RAW = os.getenv("TEMP_RAW_PATH", "/tmp/reviews_raw.parquet")
 PATH_REFINED = os.getenv("TEMP_REFINED_PATH", "/tmp/reviews_clean.parquet")
 
 
-# Função wrapper para chamar o trainer com o argumento correto
-def task_train_callable(db_connection_str):
-    # importa apenas na execução da task
-    from src.models.trainer import train_sentiment_model
-    return train_sentiment_model(db_connection_str)
-
-
 with DAG(
-    dag_id="sentiment_pipeline",
+    dag_id="sentiment_initial_etl_and_training",
     default_args=default_args,
-    schedule_interval="@daily",
+    description="Pipeline de ETL e treinamento inicial do modelo de sentimento com dados de reviews da Olist.",
+    # Este pipeline deve ser executado manualmente ou apenas uma vez, não diariamente.
+    schedule_interval=None,
     start_date=datetime(2023, 1, 1),
     catchup=False,
 ) as dag:
@@ -71,8 +67,8 @@ with DAG(
     # 4. Treinamento (Lê do Banco de Dados)
     task_train = PythonOperator(
         task_id="train_model",
-        python_callable=task_train_callable,
-        op_kwargs={"db_connection_str": DB_CONN}
+        python_callable=train_sentiment_model,
+        op_kwargs={"db_connection_str": DB_CONN},
     )
 
     # Definição do Fluxo

@@ -10,6 +10,7 @@ from typing import Optional, AsyncGenerator, Dict, Any
 from datetime import datetime
 from sqlalchemy import create_engine, text
 import numpy as np
+from src.db.predictions import PredictionsRepo
 
 # Importa a mesma função de limpeza usada no treinamento para garantir consistência
 from src.etl.processor import clean_text
@@ -26,16 +27,19 @@ monitoring = None
 model_name_loaded = None
 model_registry_version = None
 model_algorithm_loaded = None
+predictions_repo: Optional[PredictionsRepo] = None
 
 # Carrega variáveis de ambiente para conexão com o banco
 db_user = os.getenv("POSTGRES_USER")
 db_pass = os.getenv("POSTGRES_PASSWORD")
-db_host = os.getenv("POSTGRES_HOST", "postgres_app") # Se nãoo encontrar o default é postgres_app
+db_host = os.getenv("POSTGRES_HOST", "postgres_app") # Se não encontrar o default é postgres_app
+
+DATABASE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}/bacen"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Código de inicialização (executa quando a API sobe)
-    global model, vectorizer, monitoring, model_name_loaded, model_registry_version, model_algorithm_loaded
+    global model, vectorizer, monitoring, model_name_loaded, model_registry_version, model_algorithm_loaded, predictions_repo # MODIFIED: Add predictions_repo to global
     try:
         logger.info("Buscando modelo de PRODUÇÃO no MLflow...")
         model_name = "modelo_sentimento_bacen"
@@ -70,11 +74,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info(f"Modelo de Produção encontrado no Run ID: {run_id} (version={model_registry_version}, algo={model_algorithm_loaded})")
             vectorizer = mlflow.sklearn.load_model(f"runs:/{run_id}/vectorizer")
             
-            # Inicializa o monitor de predições
-            DATABASE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}/bacen"
+            # Inicializa o monitoramento
             monitoring = PredictionMonitoring(DATABASE_URL)
-            
-            logger.info("Modelo, Vetorizador e Monitoramento carregados com sucesso!")
+            # Inicializa o repositório de predições
+            predictions_repo = PredictionsRepo(db_engine)
+            logger.info("Modelo, Vetorizador, Monitoramento e Repositório de Predições carregados com sucesso!") # MODIFIED: Added PredictionsRepo to log
             
     except Exception as e:
         logger.critical(f"Erro crítico ao carregar modelo: {e}", exc_info=True)
@@ -91,8 +95,6 @@ app = FastAPI(title="API de Análise de Sentimento de Clientes", lifespan=lifesp
 mlflow.set_tracking_uri("http://mlflow:5000")
 
 # --- MELHORIA: Criar o engine uma única vez ---
-# Carregar a string de conexão de variáveis de ambiente para segurança
-DATABASE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}/bacen"
 # O engine é pesado, deve ser criado apenas uma vez quando a aplicação sobe.
 # O pool de conexões será gerenciado automaticamente.
 db_engine = create_engine(DATABASE_URL)
@@ -106,26 +108,40 @@ def log_prediction(
     probabilidade_insatisfeito: float,
     confianca: float,
     tempo_ms: float
-) -> None:
-    """Função de log de predições na tabela logs_predicoes"""
-    global model_name_loaded, model_registry_version, model_algorithm_loaded
-    modelo_info = None
-    if model_name_loaded and model_registry_version:
-        modelo_info = f"{model_name_loaded}:{model_registry_version}"
-        if model_algorithm_loaded:
-            modelo_info = f"{modelo_info}|{model_algorithm_loaded}"
-    # A Coluna 'probabilidade_confianca' armazena a confiança da predição feita
-    # A coluna 'probabilidade' armazena a probabilidade de ser INSATISFEITO
-    df = pd.DataFrame([{
-        "data": datetime.now(),
-        "texto_input": texto,
-        "classificacao": predicao,
-        "probabilidade": probabilidade_insatisfeito,
-        "probabilidade_confianca": confianca,
-        "tempo_inferencia_ms": tempo_ms,
-        "modelo_version": modelo_info
-    }])
-    df.to_sql("logs_predicoes", db_engine, if_exists="append", index=False)
+) -> int:
+    """Registra a predição e RETORNA O ID da linha inserida usando o PredictionsRepo."""
+    
+    global model_name_loaded, model_registry_version, model_algorithm_loaded, predictions_repo
+
+    if predictions_repo is None:
+        logger.error("PredictionsRepo não inicializado. Não foi possível registrar a predição.")
+        raise RuntimeError("PredictionsRepo não inicializado.")
+
+    modelo_info = f"{model_name_loaded}:{model_registry_version} ({model_algorithm_loaded})" if model_name_loaded else "unknown"
+    
+    # Chama o método do repositório com os argumentos
+    row_id = predictions_repo.insert_prediction(
+        texto=texto,
+        classificacao=predicao,
+        prob=probabilidade_insatisfeito,
+        confianca=confianca,
+        tempo_ms=tempo_ms,
+        modelo_version=modelo_info
+    )
+    return row_id
+
+# Função auxiliar para determinar sentimento, confiança e ação sugerida
+def _determine_sentiment_and_confidence(prediction: int, proba_insatisfeito: float) -> tuple[str, float, str]:
+    """Determines sentiment, confidence, and suggested action based on model prediction."""
+    if prediction == 1:
+        sentiment = "INSATISFEITO"
+        confianca = proba_insatisfeito
+        acao_sugerida = "TRANSBORDO_HUMANO"
+    else:
+        sentiment = "SATISFEITO"
+        confianca = 1 - proba_insatisfeito
+        acao_sugerida = "CONTINUAR_AVI"
+    return sentiment, confianca, acao_sugerida
 
 
 @app.post("/predict")
@@ -156,30 +172,25 @@ def predict_sentiment(
     
     tempo_ms = (time.time() - inicio) * 1000  # Converte para ms
     
-    if prediction == 1:
-        sentiment = "INSATISFEITO"
-        confianca = proba_insatisfeito
-    else:
-        sentiment = "SATISFEITO"
-        confianca = 1 - proba_insatisfeito
+    # Determina sentimento, confiança e ação sugerida
+    sentiment, confianca, acao_sugerida = _determine_sentiment_and_confidence(prediction, proba_insatisfeito)
     
-    # Registra log assincronamente para não bloquear a resposta
-    background_tasks.add_task(
-        log_prediction, 
-        request.message, 
-        sentiment, 
-        float(proba_insatisfeito), # probabilidade de ser insatisfeito
-        float(confianca),          # confiança na predição feita
-        tempo_ms
-    )
+    # Registra log da predição
+    try:
+        prediction_id = log_prediction(
+            request.message, sentiment, float(proba_insatisfeito), float(confianca), tempo_ms
+        )
+    except Exception as e:
+        logger.error(f"Erro ao salvar log: {e}")
+        prediction_id = None
 
     return {
         "sentimento": sentiment,
         "probabilidade_insatisfeito": float(proba_insatisfeito),
-        "acao_sugerida": "TRANSBORDO_HUMANO" if prediction == 1 else "CONTINUAR_AVI",
-        "tempo_ms": round(tempo_ms, 2)
+        "acao_sugerida": acao_sugerida,
+        "tempo_ms": round(tempo_ms, 2),
+        "prediction_id": prediction_id
     }
-
 
 @app.post("/feedback/{prediction_id}")
 def submit_feedback(

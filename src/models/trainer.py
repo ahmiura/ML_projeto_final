@@ -30,9 +30,15 @@ def get_data(db_connection_str: str) -> pd.DataFrame:
         logging.error(f"Falha ao ler dados do banco: {e}")
         raise
 
-def preprocess_data(df: pd.DataFrame):
-    """Vetoriza o texto e divide os dados em treino e teste."""
+def preprocess_data(df: pd.DataFrame, validation_size: float = 0.15):
+    """Vetoriza o texto e divide os dados em treino, teste e validação."""
     logging.info("Pré-processando e vetorizando dados...")
+
+    # Split inicial para separar um conjunto de validação (holdout) que nunca é usado no treino
+    train_test_df, val_df = train_test_split(
+        df, test_size=validation_size, random_state=SEED, stratify=df['target']
+    )
+
     # Vetorização - Otimizações
     tfidf = TfidfVectorizer(
         max_features=3000,       # Aumentado para capturar mais vocabulário
@@ -41,12 +47,14 @@ def preprocess_data(df: pd.DataFrame):
         max_df=0.9,              # Ignora palavras que aparecem em mais de 90% dos reviews
         sublinear_tf=True        # Aplica log na contagem (suaviza palavras muito repetidas)
     )
-    X = tfidf.fit_transform(df['texto_limpo'])
-    y = df['target']
+    # Fit o vetorizador APENAS nos dados de treino+teste para evitar data leak do conjunto de validação
+    X = tfidf.fit_transform(train_test_df['texto_limpo'])
+    y = train_test_df['target']
     
-    # Split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=SEED)
-    return X_train, X_test, y_train, y_test, tfidf
+    # Split dos dados de treino em treino e teste para a busca de hiperparâmetros
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=SEED, stratify=y)
+
+    return X_train, X_test, y_train, y_test, val_df, tfidf
 
 def get_model_configs():
     configuracoes = {
@@ -101,13 +109,17 @@ def get_model_configs():
     }
     return configuracoes
 
-def train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf):
+def train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf, data_params: dict = None):
     """Itera sobre as configurações, treina, avalia e loga os modelos no MLflow."""
     configuracoes = get_model_configs()
     best_run = {"f1": -1, "run_id": None, "model_name": None}
 
     for nome_modelo, config in configuracoes.items():
         with mlflow.start_run(run_name=nome_modelo) as run:
+            # Loga parâmetros relacionados aos dados, se fornecidos
+            if data_params:
+                mlflow.log_params(data_params)
+
             logging.info(f"Treinando {nome_modelo}...")
 
             random_search = RandomizedSearchCV(
@@ -156,32 +168,89 @@ def evaluate_model(y_true, y_pred):
         "f1": f1_score(y_true, y_pred)
     }
 
-def register_best_model(best_run: dict, registry_name: str = "modelo_sentimento_bacen"):
-    """Registra o melhor modelo do experimento no Model Registry e o promove para Produção."""
-    if best_run["run_id"]:
-        logging.info(f"\nMelhor Modelo Geral: {best_run['model_name']} com F1: {best_run['f1']:.4f}")
-        logging.info(f"Registrando modelo do Run ID: {best_run['run_id']} para Produção...")
-        
-        model_uri = f"runs:/{best_run['run_id']}/model"
-        registered_model = mlflow.register_model(model_uri, registry_name)
+def register_best_model(best_run: dict, val_df: pd.DataFrame, registry_name: str = "modelo_sentimento_bacen"):
+    """
+    Registra o melhor modelo, o valida contra o campeão (produção) e o promove se for melhor.
+    """
+    if not best_run["run_id"]:
+        logging.warning("Nenhum modelo candidato para registrar.")
+        return
 
-        client = mlflow.tracking.MlflowClient()
+    challenger_run_id = best_run["run_id"]
+    logging.info(f"\nMelhor Candidato (Challenger): {best_run['model_name']} com F1 (teste): {best_run['f1']:.4f}")
+    logging.info(f"Iniciando validação do Challenger (Run ID: {challenger_run_id})...")
+
+    # Carrega o challenger (modelo e vetorizador)
+    challenger_model_uri = f"runs:/{challenger_run_id}/model"
+    challenger_vectorizer_uri = f"runs:/{challenger_run_id}/vectorizer"
+    challenger_model = mlflow.sklearn.load_model(challenger_model_uri)
+    challenger_vectorizer = mlflow.sklearn.load_model(challenger_vectorizer_uri)
+
+    # Avalia o challenger no conjunto de validação
+    X_val_challenger = challenger_vectorizer.transform(val_df['texto_limpo'])
+    challenger_preds = challenger_model.predict(X_val_challenger)
+    challenger_f1 = f1_score(val_df['target'], challenger_preds)
+    logging.info(f"Challenger F1 (validação): {challenger_f1:.4f}")
+
+    client = mlflow.tracking.MlflowClient()
+    
+    try:
+        # Tenta carregar o campeão (modelo em produção)
+        champion_version = client.get_latest_versions(name=registry_name, stages=["Production"])[0]
+        champion_run_id = champion_version.run_id
+        logging.info(f"Carregando Champion (v{champion_version.version}, Run ID: {champion_run_id}) para comparação.")
+        
+        champion_model = mlflow.sklearn.load_model(f"models:/{registry_name}/Production")
+        champion_vectorizer = mlflow.sklearn.load_model(f"runs:/{champion_run_id}/vectorizer")
+
+        # Avalia o campeão no mesmo conjunto de validação
+        X_val_champion = champion_vectorizer.transform(val_df['texto_limpo'])
+        champion_preds = champion_model.predict(X_val_champion)
+        champion_f1 = f1_score(val_df['target'], champion_preds)
+        logging.info(f"Champion F1 (validação): {champion_f1:.4f}")
+
+        # Promove o challenger apenas se ele for melhor que o campeão
+        if challenger_f1 > champion_f1:
+            logging.info("🏆 Challenger VENCEU! Promovendo para Produção.")
+            registered_model = mlflow.register_model(challenger_model_uri, registry_name)
+            client.transition_model_version_stage(
+                name=registry_name, version=registered_model.version, stage="Production", archive_existing_versions=True
+            )
+            logging.info(f"Modelo versão {registered_model.version} promovido para PRODUCTION!")
+        else:
+            logging.warning(" Challenger NÃO superou o campeão. Modelo novo será registrado, mas não promovido.")
+            mlflow.register_model(challenger_model_uri, registry_name)
+
+    except (IndexError, mlflow.exceptions.MlflowException):
+        # Caso não exista nenhum modelo em Produção ainda
+        logging.info("Nenhum modelo em Produção encontrado. Promovendo o primeiro campeão.")
+        model_uri = f"runs:/{challenger_run_id}/model"
+        registered_model = mlflow.register_model(model_uri, registry_name)
         client.transition_model_version_stage(
-            name=registry_name,
-            version=registered_model.version,
-            stage="Production",
-            archive_existing_versions=True
+            name=registry_name, version=registered_model.version, stage="Production", archive_existing_versions=True
         )
         logging.info(f"Modelo versão {registered_model.version} promovido para PRODUCTION!")
 
+def run_training_flow(df: pd.DataFrame, experiment_name: str, data_params: dict = None):
+    """
+    Orquestra o fluxo de treinamento completo: pré-processamento, treinamento de múltiplos
+    modelos, avaliação, e registro do melhor modelo.
+
+    Args:
+        df (pd.DataFrame): O DataFrame contendo os dados 'texto_limpo' e 'target'.
+        experiment_name (str): O nome do experimento no MLflow.
+        data_params (dict, optional): Parâmetros extras sobre os dados para logar.
+    """
+    mlflow.set_tracking_uri("http://mlflow:5000")
+    mlflow.set_experiment(experiment_name)
+
+    X_train, X_test, y_train, y_test, val_df, tfidf = preprocess_data(df)
+    best_run = train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf, data_params)
+    register_best_model(best_run, val_df)
+    return f"Pipeline de treinamento finalizado. Campeão: {best_run['model_name']}"
+
 def train_sentiment_model(db_connection_str: str):
     """Lê do Postgres, treina modelo e loga no MLflow"""
-    mlflow.set_tracking_uri("http://mlflow:5000")
-    mlflow.set_experiment("sentiment_analysis")
-
     df = get_data(db_connection_str)
-    X_train, X_test, y_train, y_test, tfidf = preprocess_data(df)
-    best_run = train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf)
-    register_best_model(best_run)
-    
-    return f"Pipeline finalizado. Campeão: {best_run['model_name']}"
+    # O fluxo de treinamento inicial usará seu próprio nome de experimento
+    return run_training_flow(df, experiment_name="sentiment_analysis")
