@@ -37,7 +37,7 @@ O sistema é orquestrado em contêineres Docker e utiliza uma arquitetura de mic
 *   **PostgreSQL (x2)**:
     *   **`postgres`**: Banco de dados de metadados exclusivo para o Airflow.
     *   **`postgres_app` (aliás `postgres_bacen`)**: Banco de dados da aplicação, que armazena:
-        *   `reviews_features`: A "Feature Store" com os dados processados para treinamento.
+        *   `reviews_features`: Uma "Feature Store" simplificada com os dados processados para treinamento.
         *   `logs_predicoes`: Logs de todas as predições feitas pela API, incluindo feedbacks.
         *   *MLflow Backend*: Tabelas para armazenar os metadados de experimentos e modelos do MLflow.
 *   **Streamlit (x2)**:
@@ -177,6 +177,10 @@ A DAG `sentiment_model_lifecycle` é executada automaticamente todos os dias. El
 ```
 
 ## Rodando testes
+```bash
+pytest
+```
+Para rodar os testes de unidade do projeto, execute o comando a seguir na raiz do repositório:
 ```bash
 pytest -q
 ```

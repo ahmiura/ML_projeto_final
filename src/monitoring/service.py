@@ -15,7 +15,9 @@ class PredictionMonitoring:
             COUNT(*) as total_predicoes,
             SUM(CASE WHEN classificacao = 'INSATISFEITO' THEN 1 ELSE 0 END) as insatisfeitos,
             AVG(probabilidade) as prob_media,
-            SUM(CASE WHEN probabilidade_confianca < :threshold THEN 1 ELSE 0 END) as baixa_confianca
+            SUM(CASE WHEN probabilidade_confianca < :threshold THEN 1 ELSE 0 END) as baixa_confianca,
+            AVG(tempo_inferencia_ms) as latencia_media_ms,
+            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY tempo_inferencia_ms) as latencia_p95_ms
         FROM logs_predicoes
         WHERE data >= :start_date
         GROUP BY dia

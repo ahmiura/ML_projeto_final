@@ -44,7 +44,8 @@ if df_metrics.empty:
     st.warning(f"⚠️ Nenhuma predição registrada nos últimos {days_to_filter} dias.")
 else:
     # --- Métricas Principais ---
-    col1, col2, col3, col4 = st.columns(4)
+    st.subheader("Métricas de Negócio e Modelo")
+    col1, col2, col3, col4 = st.columns(4, gap="large")
     total_predicoes = df_metrics['total_predicoes'].sum()
     total_insatisfeitos = df_metrics['insatisfeitos'].sum()
     total_baixa_confianca = df_metrics['baixa_confianca'].sum()
@@ -63,6 +64,26 @@ else:
     with col4:
         st.metric("Predições Baixa Confiança", f"{total_baixa_confianca:,.0f}")
 
+    st.markdown("---")
+
+    # --- Métricas Operacionais ---
+    st.subheader("Métricas Operacionais (Saúde da API)")
+    col_op1, col_op2, col_op3 = st.columns(3, gap="large")
+
+    # Calcula a média ponderada da latência para o período todo
+    latencia_media_geral = (df_metrics['latencia_media_ms'] * df_metrics['total_predicoes']).sum() / total_predicoes if total_predicoes > 0 else 0
+    # Para P95, a média dos P95 diários é uma aproximação. O ideal seria recalcular no período todo, mas isso é bom para o dashboard.
+    latencia_p95_geral = df_metrics['latencia_p95_ms'].mean() if not df_metrics.empty else 0
+
+    with col_op1:
+        st.metric("Latência Média", f"{latencia_media_geral:.2f} ms")
+
+    with col_op2:
+        st.metric("Latência P95", f"{latencia_p95_geral:.2f} ms", help="95% das predições foram mais rápidas que este valor.")
+
+    with col_op3:
+        st.metric("Taxa de Erros API", "N/A", help="A taxa de erros da API (ex: HTTP 5xx) não é capturada aqui. Requer uma ferramenta de APM (Application Performance Monitoring) externa.")
+    
     st.markdown("---")
 
     # --- Visualizações ---
