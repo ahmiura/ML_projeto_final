@@ -6,6 +6,8 @@ Este projeto implementa um sistema completo de MLOps para um modelo de análise 
 
 O sistema é orquestrado em contêineres Docker e utiliza uma arquitetura de microsserviços para garantir desacoplamento e escalabilidade.
 
+![Ciclo Vida ML](docs/cicloVida_ML.drawio.svg)
+
 ![Arquitetura do Sistema](docs/arquitetura.drawio.svg)
 
 ### Componentes Principais
