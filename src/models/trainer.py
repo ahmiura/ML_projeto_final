@@ -125,7 +125,7 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test, tfidf, data_para
             random_search = RandomizedSearchCV(
                 estimator=config["modelo"], 
                 param_distributions=config["params"], 
-                n_iter=20,  # Número de combinações a testar
+                n_iter=15,  # Número de combinações a testar
                 cv=3, 
                 scoring='f1',
                 n_jobs=-1,   # Usa todos os processadores para ser mais rápido
