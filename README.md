@@ -24,17 +24,18 @@ O sistema é orquestrado em contêineres Docker e utiliza uma arquitetura de mic
       | - Worker(s)     |
       +-----------------+
 ```
+
 ```mermaid
 graph TD
     %% Atores Externos
-    User([Usuário / Chatbot]) -->|Texto| Frontend[Streamlit Frontend<br/>(Porta 8501)]
-    Dev([Engenheiro ML]) -->|Monitoramento| Monit[Streamlit Monitoring<br/>(Porta 8601)]
-    Dev -->|Gestão| AirflowUI[Airflow UI<br/>(Porta 8080)]
-    Dev -->|Análise| MLflowUI[MLflow UI<br/>(Porta 5000)]
+    User([Usuário / Chatbot]) -->|Texto| Frontend[Streamlit Frontend<br/>Porta 8501]
+    Dev([Engenheiro ML]) -->|Monitoramento| Monit[Streamlit Monitoring<br/>Porta 8601]
+    Dev -->|Gestão| AirflowUI[Airflow UI<br/>Porta 8080]
+    Dev -->|Análise| MLflowUI[MLflow UI<br/>Porta 5000]
 
     %% Camada de Serving (Inferência)
     subgraph "Camada de Serving"
-        Frontend -->|POST /predict| API[FastAPI - Prediction Service<br/>(Porta 8000)]
+        Frontend -->|POST /predict| API[FastAPI - Prediction Service<br/>Porta 8000]
         API -->|Carrega Modelo| MLflowArtifacts[(Model Artifacts)]
         API -->|Logs de Predição| PG_App[(Postgres - App DB<br/>Banco: bacen)]
         Frontend -->|POST /feedback| API
@@ -69,7 +70,6 @@ graph TD
     style PG_App fill:#bbf,stroke:#333,stroke-width:2px
     style MLflowServer fill:#bfb,stroke:#333,stroke-width:2px
     style AirflowWorker fill:#fbf,stroke:#333,stroke-width:2px
-```
 
 ### Componentes Principais
 
