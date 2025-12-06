@@ -70,6 +70,7 @@ graph TD
     style PG_App fill:#bbf,stroke:#333,stroke-width:2px
     style MLflowServer fill:#bfb,stroke:#333,stroke-width:2px
     style AirflowWorker fill:#fbf,stroke:#333,stroke-width:2px
+```
 
 ### Componentes Principais
 
