@@ -1,3 +1,10 @@
+## 📹 Apresentação do Projeto
+
+O vídeo de apresentação detalhando a arquitetura e o case de negócios está disponível no repositório.
+
+[🎥 **Clique aqui para assistir ao vídeo de apresentação (15 min)**](docs/video_apresentacao.mov)
+
+
 # Projeto MLOps: Análise de Sentimento End-to-End
 
 Este projeto implementa um sistema completo de MLOps para um modelo de análise de sentimento. Ele abrange desde o processamento inicial de dados e treinamento até o deploy de uma API de inferência, monitoramento contínuo e retreinamento automatizado.
