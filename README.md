@@ -2,7 +2,8 @@
 
 O vídeo de apresentação detalhando a arquitetura e o case de negócios está disponível no repositório.
 
-[🎥 **Clique aqui para assistir ao vídeo de apresentação (15 min)**](docs/video_apresentacao.mov)
+[🎥 **Clique aqui para baixar ao vídeo de apresentação**](docs/video_apresentacao.mov)
+
 
 
 # Projeto MLOps: Análise de Sentimento End-to-End
